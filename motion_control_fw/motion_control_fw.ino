@@ -28,16 +28,23 @@
 // #define USE_TALON
 
 //Arduino 4A motor shield (L298), pwm
-//#define USE_MOTORSHIELD_4A
+#define USE_MOTORSHIELD_4A
 
 //10 amp driver
-#define USE_MOTORSHIELD_10A
+//#define USE_MOTORSHIELD_10A
 
+//Position feedback sourse (encoder, lin pot etc)
+//#define USE_ROBOGAIA_ENCODER
+#define USE_ANALOG_ENCODER
 
+//Setpoint source
 #define USE_CYCLE_TEST_INPUT
 //#define USE_ANALOG_INPUT
 //#define USE_SERIAL_INPUT
 //#define USE_PWM_INPUT
+
+//home using endswitches
+#define USE_HOMING_DISABLED
 //--------------------------------------------
 //globals and constants
 const uint8_t TEST_PIN = 14;  //debugging/timinin
@@ -86,10 +93,21 @@ double ChA_Current = 0.0, ChB_Current = 0.0;
 firFilter FilterA, FilterB;
 
 //PID position controller, links and initial tuning parameters
-MegaEncoderCounter encoder(4); // Initializes the Mega Encoder Counter in the 4X Count Mode
-long enc_pos_A = 0, enc_pos_B = 0;
-#define ENCODER_POLARITY -1
+//analog potentiometer
+#ifdef USE_ANALOG_ENCODER
+    #define PIN_ANA_FB_A 2
+    #define PIN_ANA_FB_B 3
+#endif
 
+//hardware endcoder counter (Robogaia)
+#ifdef USE_ROBOGAIA_ENCODER
+    MegaEncoderCounter encoder(4); // Initializes the Mega Encoder Counter in the 4X Count Mode
+    #define ENCODER_POLARITY -1
+#endif
+
+//position feedback variable, (analog or quadr(robogaia))
+long enc_pos_A = 0, enc_pos_B = 0;
+    
 #define PIN_PWM_IN_A 2
 #define PIN_ANA_IN_A 8
 
@@ -107,13 +125,13 @@ int State_Motor_A = INIT_STATE, State_Motor_B = INIT_STATE;
 #define HOME_SPD_CMD 25
 
 
-#define Pinit 0.2//FASTNSHAKY 0.3 //STABLER 0.1
-#define Iinit 0.1//FASTNSHAKY 0.1 //STABLER 0.05
-#define Dinit 0.0
+#define Pinit 0.75//1.0//1.5//0.2//FASTNSHAKY 0.3 //STABLER 0.1
+#define Iinit 3.0//4.0//0.1//FASTNSHAKY 0.1 //STABLER 0.05
+#define Dinit 0.03//0.02//0.0
 #define CMD_MIN -250//-250//-64 //-127 //-255
 #define CMD_MAX 250//250//64 //127 //255
-#define POS_MAX 0.0
-#define POS_MIN -1650//-1350//4xmode-4500// 1xmode -1350.0
+#define POS_MAX 1024//0.0
+#define POS_MIN 110//-1650//-1350//4xmode-4500// 1xmode -1350.0
 //#define POS_MAX 4500.0
 //#define POS_MIN 0.0
 
@@ -130,15 +148,15 @@ PID pos_controllerA(&Apos_pid_in, &Apos_pid_out, &Apos_pid_sp,Pinit,Iinit,Dinit,
 PID pos_controllerB(&Bpos_pid_in, &Bpos_pid_out, &Bpos_pid_sp,Pinit,Iinit,Dinit, DIRECT);
 
 //Analog IN
-//#ifdef USE_MOTORSHIELD_4A
-//#define PIN_ANA_IN_A 3
-//#define PIN_ANA_IN_B 4
-//#endif
+#ifdef USE_MOTORSHIELD_4A
+#define PIN_ANA_IN_A A2//3
+#define PIN_ANA_IN_B A3//4
+#endif
 
-//#ifdef USE_MOTORSHIELD_10A
+#ifdef USE_MOTORSHIELD_10A
 #define PIN_ANA_IN_A 8
 #define PIN_ANA_IN_B 9
-//#endif
+#endif
 
 //FreeRTOS periods
 #define SAMPLE_PERIOD 5L//25L//5L//50L // 2L min measured at 600us 10L=8.73m  5L=3.6ms
@@ -176,9 +194,12 @@ void setup() {
   FilterA.begin();
   FilterB.begin();
   SP_FilterA.begin();
-  encoder.switchCountMode(1);
-  encoder.XAxisReset( );
-  encoder.YAxisReset( );
+  
+  #ifdef USE_ROBOGAIA_ENCODER
+      encoder.switchCountMode(1);
+      encoder.XAxisReset( );
+      encoder.YAxisReset( );
+  #endif
   
   #ifdef USE_PWM_INPUT
     timer_four_setup();
@@ -318,11 +339,11 @@ static void vPositionLoopTask(void *pvParameters) {
   while(true) {
     #ifdef USE_CYCLE_TEST_INPUT
     
-    #define RAMP_RATE 2.0 //0.5 //0.9  //counts/msec
+    #define RAMP_RATE 3.0 //0.5 //0.9  //counts/msec
     #define TRAJ_FWD 1
     #define TRAJ_BKW 2
-    #define TRAJ_MARGIN_MIN  0  //distance from end limits
-    #define TRAJ_MARGIN_MAX  50  //distance from end limits
+    #define TRAJ_MARGIN_MIN  100 //0  //distance from end limits
+    #define TRAJ_MARGIN_MAX  100 //50  //distance from end limits
     #define TRAJ_MIN POS_MIN + TRAJ_MARGIN_MIN
     #define TRAJ_MAX POS_MAX - TRAJ_MARGIN_MAX
     #define TRAJ_WINDOW 500.0
@@ -391,8 +412,19 @@ static void vPositionLoopTask(void *pvParameters) {
 //    }
     #endif
     
-    enc_pos_A = ENCODER_POLARITY*encoder.XAxisGetCount();
-    enc_pos_B = ENCODER_POLARITY*encoder.YAxisGetCount();
+    #ifdef USE_ROBOGAIA_ENCODER
+        enc_pos_A = ENCODER_POLARITY*encoder.XAxisGetCount();
+        enc_pos_B = ENCODER_POLARITY*encoder.YAxisGetCount();
+    #endif
+    
+    #ifdef USE_ANALOG_ENCODER
+        enc_pos_A = (double)analogRead(PIN_ANA_FB_A);
+        //enc_pos_A = constrain(enc_pos_A, 512, 1024); 
+        
+        enc_pos_B = (double)analogRead(PIN_ANA_FB_A);
+        //enc_pos_B = constrain(enc_pos_B, 512, 1024); 
+    #endif
+    
     Apos_pid_in = double(enc_pos_A);
     Bpos_pid_in = double(enc_pos_B);
     pos_controllerA.Compute();
@@ -456,10 +488,15 @@ void state_machine_advance() {
         homing_blank_delay = 0;
         break;
       case HOME_STATE:
+        #ifdef USE_HOMING_DISABLED
+            home_sw_state = AT_HOME;
+        #endif
         if (home_sw_state == AT_HOME) 
         {
-            encoder.XAxisReset( );
-            encoder.YAxisReset( );
+            #ifdef USE_ROBOGAIA_ENCODER
+                encoder.XAxisReset( );
+                encoder.YAxisReset( );
+            #endif
             motorA_cmd = 0;
             motorB_cmd = 0;
             Apos_pid_sp = 0;
@@ -594,8 +631,8 @@ void pid_gui_response()
   Serial.print(" ");
   //3
   //Serial.print(ChB_Current);
-  //Serial.print(Apos_pid_out);
-  Serial.print(Bpos_pid_sp);
+  Serial.print(Apos_pid_out);
+  //Serial.print(Bpos_pid_sp);
   //Serial.print(time_pwm_input);//
   //Serial.print(time_rise_edge); //
   //Serial.print(time_pulse);
